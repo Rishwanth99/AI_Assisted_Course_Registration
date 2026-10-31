@@ -4,6 +4,42 @@
 
 The service manages enrollment, drop, and waitlist promotion for a single course-offering aggregate. The REST controller is an adapter; `EnrollmentApplicationService` coordinates use cases; `CourseOffering` protects domain invariants; the repository is an infrastructure port.
 
+## Enrollment and drop flow
+
+```mermaid
+flowchart TD
+    Client[REST client or CommandLineRunner] --> Controller[EnrollmentController]
+    Controller --> Service[EnrollmentApplicationService]
+    Service --> Repository[CourseOfferingRepository]
+    Repository --> Offering[CourseOffering aggregate]
+
+    Offering --> Duplicate{Already enrolled or waitlisted?}
+    Duplicate -->|Yes| Existing[Return idempotent result]
+    Duplicate -->|No| Eligibility{Prerequisites satisfied?}
+    Eligibility -->|No| Ineligible[Return NOT_ELIGIBLE]
+    Eligibility -->|Yes| Capacity{Seat available?}
+    Capacity -->|Yes| Enroll[Add learner to enrolled collection]
+    Capacity -->|No| Waitlist[Append learner to FIFO waitlist]
+    Enroll --> Result[Return registration result]
+    Waitlist --> Result
+    Existing --> Result
+    Ineligible --> Result
+
+    Drop[DELETE enrollment request] --> Service
+    Service --> Remove{Learner enrolled?}
+    Remove -->|No| NotEnrolled[Return NOT_ENROLLED]
+    Remove -->|Yes| OpenSeat[Remove learner and open one seat]
+    OpenSeat --> Scan[Scan waitlist in FIFO order]
+    Scan --> EligibleCandidate{Eligible candidate found?}
+    EligibleCandidate -->|Yes| Promote[Remove candidate from queue and enroll]
+    EligibleCandidate -->|No| EmptySeat[Keep seat open; retain ineligible learners]
+    Promote --> DropResult[Return DROPPED with promoted learner]
+    EmptySeat --> DropResult
+    NotEnrolled --> DropResult
+```
+
+The aggregate performs each mutable operation under its `ReentrantLock`, so the state checks and resulting enrollment, queue, or promotion update are atomic for this in-memory implementation.
+
 ## API
 
 - `POST /api/v1/course-offerings/{offeringId}/enrollments`

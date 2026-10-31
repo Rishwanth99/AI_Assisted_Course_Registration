@@ -17,6 +17,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNullPointerException;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class EnrollmentApplicationServiceTest {
 
@@ -34,6 +36,16 @@ class EnrollmentApplicationServiceTest {
                 courseOfferingRepository,
                 new PrerequisiteEligibilityPolicy()
         );
+    }
+
+    @Test
+    void rejectsNullDependenciesAndReportsUnknownOffering() {
+        assertThatNullPointerException().isThrownBy(() -> new EnrollmentApplicationService(null, new PrerequisiteEligibilityPolicy()));
+        assertThatNullPointerException().isThrownBy(() -> new EnrollmentApplicationService(courseOfferingRepository, null));
+
+        assertThatThrownBy(() -> enrollmentApplicationService.getCourseOffering("unknown"))
+                .isInstanceOf(CourseOfferingNotFoundException.class)
+                .hasMessage("Course offering 'unknown' was not found.");
     }
 
     @Test
@@ -137,8 +149,11 @@ class EnrollmentApplicationServiceTest {
                 executorService.submit(() -> {
                     ready.countDown();
                     start.await();
+                    RegistrationOutcome outcome = enrollmentApplicationService
+                            .enroll(OFFERING_ID, eligibleLearner(learnerId))
+                            .outcome();
                     synchronized (outcomes) {
-                        outcomes.add(enrollmentApplicationService.enroll(OFFERING_ID, eligibleLearner(learnerId)).outcome());
+                        outcomes.add(outcome);
                     }
                     return null;
                 });
