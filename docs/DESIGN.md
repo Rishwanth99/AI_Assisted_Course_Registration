@@ -4,38 +4,45 @@
 
 The service manages enrollment, drop, and waitlist promotion for a single course-offering aggregate. The REST controller is an adapter; `EnrollmentApplicationService` coordinates use cases; `CourseOffering` protects domain invariants; the repository is an infrastructure port.
 
-## Enrollment and drop flow
+## Endpoint Flows
+
+### 1. Enroll Learner (`POST /api/v1/course-offerings/{offeringId}/enrollments`)
 
 ```mermaid
 flowchart TD
-    Client[REST client or CommandLineRunner] --> Controller[EnrollmentController]
-    Controller --> Service[EnrollmentApplicationService]
-    Service --> Repository[CourseOfferingRepository]
-    Repository --> Offering[CourseOffering aggregate]
+    Request["POST Enrollment Request"] --> Lookup{"Offering exists?"}
+    Lookup -->|No| NotFound["Return 404 NOT_FOUND"]
+    Lookup -->|Yes| Duplicate{"Already enrolled or waitlisted?"}
+    Duplicate -->|Yes| Existing["Return 200 OK (ALREADY_ENROLLED / ALREADY_WAITLISTED)"]
+    Duplicate -->|No| Eligible{"Meets prerequisites?"}
+    Eligible -->|No| Ineligible["Return 422 UNPROCESSABLE_ENTITY (NOT_ELIGIBLE)"]
+    Eligible -->|Yes| Seat{"Seat available?"}
+    Seat -->|Yes| Enroll["Enroll learner -> Return 201 CREATED (ENROLLED)"]
+    Seat -->|No| Waitlist["Add to FIFO waitlist -> Return 202 ACCEPTED (WAITLISTED)"]
+```
 
-    Offering --> Duplicate{Already enrolled or waitlisted?}
-    Duplicate -->|Yes| Existing[Return idempotent result]
-    Duplicate -->|No| Eligibility{Prerequisites satisfied?}
-    Eligibility -->|No| Ineligible[Return NOT_ELIGIBLE]
-    Eligibility -->|Yes| Capacity{Seat available?}
-    Capacity -->|Yes| Enroll[Add learner to enrolled collection]
-    Capacity -->|No| Waitlist[Append learner to FIFO waitlist]
-    Enroll --> Result[Return registration result]
-    Waitlist --> Result
-    Existing --> Result
-    Ineligible --> Result
+### 2. Drop Learner (`DELETE /api/v1/course-offerings/{offeringId}/enrollments/{learnerId}`)
 
-    Drop[DELETE enrollment request] --> Service
-    Service --> Remove{Learner enrolled?}
-    Remove -->|No| NotEnrolled[Return NOT_ENROLLED]
-    Remove -->|Yes| OpenSeat[Remove learner and open one seat]
-    OpenSeat --> Scan[Scan waitlist in FIFO order]
-    Scan --> EligibleCandidate{Eligible candidate found?}
-    EligibleCandidate -->|Yes| Promote[Remove candidate from queue and enroll]
-    EligibleCandidate -->|No| EmptySeat[Keep seat open; retain ineligible learners]
-    Promote --> DropResult[Return DROPPED with promoted learner]
-    EmptySeat --> DropResult
-    NotEnrolled --> DropResult
+```mermaid
+flowchart TD
+    Request["DELETE Enrollment Request"] --> Lookup{"Offering exists?"}
+    Lookup -->|No| NotFound["Return 404 NOT_FOUND"]
+    Lookup -->|Yes| Enrolled{"Is learner enrolled?"}
+    Enrolled -->|No| NotEnrolled["Return 404 NOT_FOUND (NOT_ENROLLED)"]
+    Enrolled -->|Yes| Remove["Remove learner & open seat"]
+    Remove --> Waitlist{"Eligible learner in FIFO waitlist?"}
+    Waitlist -->|Yes| Promote["Promote candidate -> Return 200 OK (DROPPED + promotedLearnerId)"]
+    Waitlist -->|No| KeepOpen["Keep seat open -> Return 200 OK (DROPPED)"]
+```
+
+### 3. Get Course Offering (`GET /api/v1/course-offerings/{offeringId}`)
+
+```mermaid
+flowchart TD
+    Request["GET Course Offering Request"] --> Lookup{"Offering exists?"}
+    Lookup -->|No| NotFound["Return 404 NOT_FOUND"]
+    Lookup -->|Yes| Snapshot["Read capacity, enrolled learners & waitlist"]
+    Snapshot --> Response["Return 200 OK (CourseOfferingResponse)"]
 ```
 
 The aggregate performs each mutable operation under its `ReentrantLock`, so the state checks and resulting enrollment, queue, or promotion update are atomic for this in-memory implementation.
