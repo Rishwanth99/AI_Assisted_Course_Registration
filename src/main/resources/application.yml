@@ -1,0 +1,7 @@
+spring:
+  application:
+    name: course-registration
+
+server:
+  error:
+    include-message: never
